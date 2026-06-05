@@ -1,29 +1,16 @@
 ---
 # Deploy Odoo 18 LTS via Helm on the K3s cluster
 - name: Deploy Odoo 18 with Helm
-  hosts: control_plane
-  become: true
+  hosts: localhost
+  connection: local
   vars:
     odoo_namespace: "default"
     odoo_release_name: "odoo"
     odoo_hostname: "odoo.local"
+    kubeconfig_path: "{{ ansible_env.HOME }}/.kube/config"
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
   tasks:
-    - name: Check if Helm is installed
-      ansible.builtin.command: helm version --short
-      register: helm_check
-      changed_when: false
-      failed_when: false
-
-    - name: Install Helm
-      ansible.builtin.shell: |
-        curl -fsSL https://get.helm.sh/helm-v4.1.4-linux-amd64.tar.gz -o /tmp/helm.tar.gz
-        tar xzf /tmp/helm.tar.gz -C /tmp/
-        mv /tmp/linux-amd64/helm /usr/local/bin/helm
-        rm -rf /tmp/linux-amd64 /tmp/helm.tar.gz
-      args:
-        creates: /usr/local/bin/helm
-      when: helm_check.rc != 0
-
     - name: Generate self-signed TLS certificate for odoo.local
       ansible.builtin.shell: |
         openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -38,21 +25,19 @@
           --cert=/tmp/tls.crt --key=/tmp/tls.key \
           -n {{ odoo_namespace }} --dry-run=client -o yaml | \
         kubectl apply -f -
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       changed_when: false
 
-    - name: Deploy Odoo via Helm
-      kubernetes.core.helm:
-        name: "{{ odoo_release_name }}"
-        chart_ref: "oci://registry-1.docker.io/bitnamicharts/odoo"
-        release_namespace: "{{ odoo_namespace }}"
-        create_namespace: true
-        kubeconfig: /etc/rancher/k3s/k3s.yaml
-        values:
+    - name: Write Helm values file
+      ansible.builtin.copy:
+        dest: /tmp/odoo-values.yml
+        mode: "0644"
+        content: |
+          global:
+            security:
+              allowInsecureImages: true
           image:
             registry: docker.io
-            repository: bitnami/odoo
+            repository: bitnamilegacy/odoo
           resources:
             requests:
               memory: "1Gi"
@@ -67,30 +52,54 @@
           ingress:
             enabled: true
             ingressClassName: traefik
-            hostname: "{{ odoo_hostname }}"
+            hostname: {{ odoo_hostname }}
             tls: true
             selfSigned: false
             extraTls:
               - hosts:
-                  - "{{ odoo_hostname }}"
+                  - {{ odoo_hostname }}
                 secretName: odoo-tls
           postgresql:
+            image:
+              registry: docker.io
+              repository: bitnamilegacy/postgresql
             resources:
               requests:
                 memory: "512Mi"
                 cpu: "250m"
 
+    - name: Check if Odoo is already deployed
+      ansible.builtin.shell: helm status {{ odoo_release_name }} -n {{ odoo_namespace }} 2>/dev/null
+      register: helm_status
+      changed_when: false
+      failed_when: false
+
+    - name: Deploy Odoo via Helm
+      ansible.builtin.shell: |
+        helm install {{ odoo_release_name }} \
+          oci://registry-1.docker.io/bitnamicharts/odoo \
+          -n {{ odoo_namespace }} \
+          -f /tmp/odoo-values.yml \
+          --timeout 20m
+      when: helm_status.rc != 0
+
     - name: Wait for Odoo pod to be Running
       ansible.builtin.shell: |
         kubectl get pods -n {{ odoo_namespace }} -l app.kubernetes.io/name=odoo \
-          -o jsonpath='{.items[0].status.phase}'
+          --no-headers -o custom-columns=STATUS:.status.phase 2>/dev/null | head -1
       register: odoo_pod_status
       until: odoo_pod_status.stdout == "Running"
       retries: 60
       delay: 15
       changed_when: false
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+    - name: Show Odoo access information
+      ansible.builtin.debug:
+        msg: |
+          Odoo is deployed and running!
+          URL: https://{{ odoo_hostname }}
+          Default email: user@example.com
+          Get password: kubectl get secret odoo -o jsonpath="{.data.odoo-password}" | base64 -d
 
 - name: Configure local access to Odoo
   hosts: localhost
