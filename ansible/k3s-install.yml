@@ -5,9 +5,8 @@
   become: true
   tasks:
     - name: Load br_netfilter kernel module
-      community.general.modprobe:
-        name: br_netfilter
-        state: present
+      ansible.builtin.command: modprobe br_netfilter
+      changed_when: true
 
     - name: Persist br_netfilter across reboots
       ansible.builtin.copy:
