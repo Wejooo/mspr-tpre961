@@ -1,0 +1,28 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.lock.hcl
+
+# Secrets
+secrets/
+*.vault
+.env
+*.pem
+id_rsa
+id_ed25519
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Ansible retry files
+*.retry
